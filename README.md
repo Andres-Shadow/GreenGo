@@ -1,67 +1,154 @@
-<div align="center">
+# GreenGo
 
-# 🐹 GreenGo 💚
+GreenGo es una libreria de Go para crear pipelines simples y reutilizables. Su caso principal es vigilar una rama de Git y desplegar el proyecto con Docker Compose cada vez que aparece un nuevo commit.
 
-</div>
+El proyecto tambien incluye un comando listo para usar: `greengo`.
 
-# 🌱 Automated Deployment Pipeline with Docker & Git Integration
+## Instalacion
 
-Welcome to this deployment automation project, designed to efficiently deploy changes in Git repositories using `docker-compose`. It includes a cycle to review new commits and automatically clone repositories into the runtime environment. This tool facilitates continuous integration and automatic, reliable, and efficient application deployment.
+```bash
+go get github.com/Andres-Shadow/GreenGo
+```
 
-## 💡 Motivation
+Para compilar el comando:
 
-The original idea behind this project greatly inspired me, prompting a language transition to Go with an emphasis on Docker Compose. This adjustment aligns well with the technologies I frequently use for my university projects, particularly Docker Compose, which remains central to my workflow. Creating this project has significantly streamlined my CI/CD processes, enabling a smoother handling of changes and automations.
+```bash
+go build -o greengo ./cmd/greengo
+```
 
-## 🌍 Green Coding: Sustainable and Efficient Code
+## Uso como CLI
 
-This project was developed following **Green Coding** principles, which aim to minimize the environmental impact of software development. By designing optimized deployment scripts and automating repetitive tasks, we reduce processing time and required computational resources, achieving a more sustainable execution. These small changes, when applied on a large scale, help reduce the carbon footprint of technology projects and build a greener future.
+```bash
+./greengo \
+  -repo https://github.com/usuario/proyecto.git \
+  -branch main \
+  -workspace ./runtime/proyecto \
+  -interval 30s \
+  -initial-run
+```
 
-## ⚙️ Setup and Usage
+Por defecto GreenGo ejecuta:
 
-Follow these steps to set up and run this project on your local machine.
+```bash
+docker compose up --build -d
+```
 
-1. **Clone this repository:**
+Si necesitas Docker Compose v1:
 
-    ```bash
-    git clone <REPOSITORY_URL>
-    cd <REPOSITORY_NAME>
-    ```
+```bash
+./greengo -repo https://github.com/usuario/proyecto.git -compose-command docker-compose
+```
 
-2. **Configure the required variables:** In the main.go file, update the REPO and BRANCH constants with the repository URL and the branch you want to monitor.
+Tambien puedes configurar el comando con variables de entorno:
 
-    ```golang
-    const (
-        REPO   = "https://github.com/your_user/your_repository.git" // Repository URL
-        BRANCH = "main" // Branch to monitor
-    )
-    ```
+```bash
+GREENGO_REPO=https://github.com/usuario/proyecto.git
+GREENGO_BRANCH=main
+GREENGO_WORKSPACE=./runtime/proyecto
+GREENGO_INTERVAL=30s
+GREENGO_COMPOSE_FILES=docker-compose.yml,docker-compose.prod.yml
+GREENGO_COMPOSE_COMMAND=docker
+GREENGO_INITIAL_RUN=true
+```
 
-3. **Build and run the program:** Compile and run the script.
+## Uso como libreria
 
-    ```bash
-    go build -o deployment-pipeline main.go
-    ./deployment-pipeline
-    ```
+### Pipeline generico
 
-4. **Start the monitoring process:** Once started, the script will check every 5 seconds for new commits on the specified branch and will automatically run docker-compose if it detects changes.
+```go
+package main
 
-## 🔧 Extending the Pipeline
+import (
+	"context"
+	"log"
+	"os"
 
-This project includes a flexible structure that makes it easy to add new stages to the deployment pipeline. Each stage can be defined as a command executed with the helper function `pipelineStage`, located in `pipeline.go`. Here’s how you can add additional steps:
+	greengo "github.com/Andres-Shadow/GreenGo"
+)
 
-1. **Create a New Stage:**
-   To add a new step, simply call the `pipelineStage` function in `processPipeline`, passing the command and working directory as arguments. For example, if you want to add a step to update dependencies, add the following line in `processPipeline`:
+func main() {
+	logger := log.New(os.Stdout, "", log.LstdFlags)
 
-    ```go
-   pipelineStage([]string{"your-command-here"}, "working-directory")
-   ```
+	pipeline := greengo.NewPipeline("build-and-test", greengo.WithLogger(logger))
+	pipeline.AddCommand("download deps", greengo.Command{Name: "go", Args: []string{"mod", "download"}})
+	pipeline.AddCommand("run tests", greengo.Command{Name: "go", Args: []string{"test", "./..."}})
 
-2. **Organize Additional Utilities:** For more advanced customizations or reusable functions, consider adding a new file in the utils directory to keep the pipeline organized and modular.
+	if err := pipeline.Run(context.Background(), greengo.RunContext{}); err != nil {
+		logger.Fatal(err)
+	}
+}
+```
 
-3. **Run Custom Stages Conditionally:** If some stages should run only under certain conditions, you can add conditional statements around pipelineStage calls to control when they execute.
+### Pipeline de despliegue con Docker Compose
 
-This approach ensures that each pipeline stage is modular and easy to maintain, allowing you to expand functionality without complicating the main workflow.
+```go
+package main
 
-## 🚀 Credits
+import (
+	"context"
+	"log"
+	"os"
+	"time"
 
-This project was developed based on the repository [python-deployment-script-sample](https://github.com/acoronadoc/python-deployment-script-sample) created by [acoronadoc](https://github.com/acoronadoc). From this example, we expanded and optimized the workflow to make it modular, efficient, and easy to integrate into deployments with `docker-compose`.
+	greengo "github.com/Andres-Shadow/GreenGo"
+)
+
+func main() {
+	logger := log.New(os.Stdout, "", log.LstdFlags)
+
+	pipeline, err := greengo.NewDockerComposePipeline(greengo.DeployConfig{
+		RepoURL:   "https://github.com/usuario/proyecto.git",
+		Branch:    "main",
+		Workspace: "./runtime/proyecto",
+		Build:     true,
+		Detach:    true,
+	}, greengo.WithLogger(logger))
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	err = greengo.Watch(context.Background(), greengo.WatchConfig{
+		RepoURL:    "https://github.com/usuario/proyecto.git",
+		Branch:     "main",
+		Interval:   30 * time.Second,
+		Workspace:  "./runtime/proyecto",
+		Pipeline:   pipeline,
+		Logger:     logger,
+		InitialRun: true,
+	})
+	if err != nil {
+		logger.Fatal(err)
+	}
+}
+```
+
+## API principal
+
+- `NewPipeline`: crea un pipeline reutilizable.
+- `AddStage`: agrega una etapa con logica Go personalizada.
+- `AddCommand`: agrega una etapa basada en comandos del sistema.
+- `Run`: ejecuta las etapas en orden y se detiene ante el primer error.
+- `LatestCommit`: consulta el ultimo commit remoto de una rama.
+- `Watch`: vigila una rama y ejecuta un pipeline cuando cambia el commit.
+- `NewDockerComposePipeline`: crea el flujo Git clone + Docker Compose.
+
+## Flujo de despliegue incluido
+
+`NewDockerComposePipeline` ejecuta estas etapas:
+
+1. Limpia y crea el directorio de trabajo.
+2. Clona la rama configurada con `git clone --branch <branch> --single-branch`.
+3. Ejecuta Docker Compose en el proyecto clonado.
+
+Este flujo encaja con proyectos universitarios o personales donde cada aplicacion ya trae su `docker-compose.yml` y solo necesitas redeplegar al detectar cambios en Git.
+
+## Desarrollo
+
+```bash
+go test ./...
+go vet ./...
+```
+
+## Creditos
+
+La idea inicial se inspiro en `python-deployment-script-sample` de [acoronadoc](https://github.com/acoronadoc). GreenGo ahora separa esa premisa en una libreria Go y un CLI reutilizable para despliegues con Docker Compose.
